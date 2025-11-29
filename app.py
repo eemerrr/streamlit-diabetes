@@ -75,7 +75,7 @@ INSURANCE_OPTIONS: Dict[int, str] = {
 
 @st.cache_resource
 def load_model(
-    path: Path = Path("best_model.pkl"),
+    path: Path = Path("best_model_ovs.pkl"),
 ) -> Tuple[object, str, float | None]:
     """Load the persisted model and return (estimator, display_name, roc_auc_if_available)."""
     with path.open("rb") as f:
