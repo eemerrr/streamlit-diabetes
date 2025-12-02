@@ -1,6 +1,6 @@
 import pickle
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 
 import numpy as np
 import pandas as pd
@@ -73,16 +73,39 @@ INSURANCE_OPTIONS: Dict[int, str] = {
 }
 
 
+def _coerce_transform(preprocessor: Any, X: pd.DataFrame) -> Any:
+    """Attempt to transform the features regardless of whether the object expects a DF or ndarray."""
+    try:  # try the most permissive path first
+        return preprocessor.transform(X)
+    except Exception:
+        return preprocessor.transform(X.values)
+
+
 @st.cache_resource
-def load_model(
-    path: Path = Path("best_model.pkl"),
-) -> Tuple[object, str, float | None]:
-    """Load the persisted model and return (estimator, display_name, roc_auc_if_available)."""
-    with path.open("rb") as f:
+def load_artifacts(
+    model_path: Path = Path("best_model.pkl"),
+    scaler_path: Path = Path("feature_scaler.pkl"),
+) -> Tuple[object, str, float | None, Any | None]:
+    """Load persisted estimator plus any attached preprocessor/scaler."""
+    scaler: Any | None = None
+    with model_path.open("rb") as f:
         obj = pickle.load(f)
-    if isinstance(obj, dict) and "model" in obj:
-        return obj["model"], obj.get("model_name", "Model"), obj.get("roc_auc")
-    return obj, obj.__class__.__name__, None
+
+    if isinstance(obj, dict):
+        scaler = obj.get("preprocessor") or obj.get("scaler")
+        model = obj.get("model", obj)
+        model_name = obj.get("model_name", model.__class__.__name__)
+        roc_auc = obj.get("roc_auc")
+    else:
+        model = obj
+        model_name = obj.__class__.__name__
+        roc_auc = None
+
+    if scaler is None and scaler_path.exists():
+        with scaler_path.open("rb") as f:
+            scaler = pickle.load(f)
+
+    return model, model_name, roc_auc, scaler
 
 
 def yes_no(label: str, key: str, yes_value: int = 1, no_value: int = 0) -> int:
@@ -207,8 +230,13 @@ def main() -> None:
         "all other variables are required by the trained model."
     )
 
-    model, model_name, roc_auc = load_model()
+    model, model_name, roc_auc, preprocessor = load_artifacts()
     st.success(f"Model loaded: {model_name}" + (f" (ROC-AUC: {roc_auc:.3f})" if roc_auc else ""))
+    if preprocessor is None:
+        st.warning(
+            "No saved scaler/preprocessor detected. If the model was trained on standardized inputs, "
+            "place the matching scaler in `feature_scaler.pkl` or embed it inside `best_model.pkl`."
+        )
 
     with st.form("prediction_form"):
         inputs = build_input_row()
@@ -217,9 +245,16 @@ def main() -> None:
     if submitted:
         ordered_values = [inputs[feat] for feat in FEATURE_ORDER]
         X = pd.DataFrame([ordered_values], columns=FEATURE_ORDER)
+        model_input: Any = X
+        if preprocessor is not None:
+            try:
+                model_input = _coerce_transform(preprocessor, X)
+            except Exception as exc:  # pragma: no cover - defensive path for unexpected preprocessors
+                st.error(f"Scaling failed: {exc}")
+                st.stop()
 
         try:
-            proba = float(model.predict_proba(X)[0][1])
+            proba = float(model.predict_proba(model_input)[0][1])
             predicted_class = int(proba >= 0.5)
             st.subheader("Prediction")
             st.metric(
