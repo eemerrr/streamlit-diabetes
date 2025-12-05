@@ -255,7 +255,7 @@ def main() -> None:
 
         try:
             proba = float(model.predict_proba(model_input)[0][1])
-            predicted_class = int(proba >= 0.5)
+            predicted_class = int(proba >= 0.25)
             st.subheader("Prediction")
             st.metric(
                 "Estimated probability of diabetes",
